@@ -28,8 +28,7 @@ import subprocess
 
 from core import SaltStackClient
 
-from docopt import docopt
-from itertools import chain
+from plumbum import cli
 from clint.eng import join as eng_join
 from clint.textui import colored, puts, indent
 from os import listdir, mkdir
@@ -49,9 +48,11 @@ def call(cmd):
     subprocess.call(cmd, shell=True)
 
 
-class BaseObject(object):
+class SaltPad(cli.Application):
+    VERSION = "0.0.1"
 
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
+        super(SaltPad, self).__init__(*args, **kwargs)
         self.config_file = expanduser("~/.saltpad.json")
 
         if isfile(self.config_file):
@@ -62,76 +63,63 @@ class BaseObject(object):
 
         self.client = SaltStackClient()
 
+    def main(self, *args):
+        if args:
+            print "Unknown command %r" % (args[0],)
+            return 1   # error exit code
+        if not self.nested_command:           # will be ``None`` if no sub-command follows
+            print "No command given"
+            return 1   # error exit code
+
     def write_config_file(self):
         with open(self.config_file, 'w') as f:
             json.dump(self.config, f)
 
 
-class Register(BaseObject):
+@SaltPad.subcommand("register_dir")
+class RegisterDir(cli.Application):
 
-    def __init__(self, options):
-        super(Register, self).__init__()
-        self.options = options
-
-        if self.options['register_dir'] is True:
-            self.register_dir()
-
-    def register_dir(self):
-        base_dir = abspath(self.options['DIRECTORY_OF_TEMPLATES'])
-
-        logging.info("Looking in %s for templates", base_dir)
+    def main(self, templates_directory):
+        puts(colored.blue("Looking in %s for templates" %  templates_directory))
 
         # Check for VagrantFile template file
-        vagrantfile_template = join(base_dir, 'Vagrantfile.template')
+        vagrantfile_template = join(templates_directory, 'Vagrantfile.template')
         if isfile(vagrantfile_template):
-            logging.info("Found a Vagrantfile template: %s", vagrantfile_template)
+            puts(colored.blue("Found a Vagrantfile template: %s" % vagrantfile_template))
 
-            self.config.setdefault('vagrantfiles', {})['default'] = vagrantfile_template
+            self.parent.config.setdefault('vagrantfiles', {})['default'] = vagrantfile_template
         else:
-            logging.warning("No Vagrantfile template found: %s", vagrantfile_template)
+            puts(colored.yellow("No Vagrantfile template found: %s" % vagrantfile_template))
 
         # Check for minions configurations
-        minions_conf = join(base_dir, 'minions_configuration')
+        minions_conf = join(templates_directory, 'minions_configuration')
         if isdir(minions_conf):
-            logging.info("Found a minion configuration directory: %s", minions_conf)
+            logging.info("Found a minion configuration directory: %s" % minions_conf)
 
             for filename in listdir(minions_conf):
                 filepath = join(minions_conf, filename)
-                logging.info("Found minion conf: %s", filepath)
+                puts(colored.blue("Found minion conf: %s" % filepath))
 
-                self.config.setdefault('minion_conf', {})[filename] = filepath
+                self.parent.config.setdefault('minion_conf', {})[filename] = filepath
         else:
-            logging.warning("No minion configuration directory found: %s", minions_conf)
+            puts(colored.yellow("No minion configuration directory found: %s" % minions_conf))
 
         # Write config file
-        self.write_config_file()
+        self.parent.write_config_file()
 
 
-class VMManager(BaseObject):
+@SaltPad.subcommand("create_vm")
+class CreateVm(cli.Application):
 
-    def __init__(self, options):
-        super(VMManager, self).__init__()
-        self.options = options
-
-        if self.options['create_vm'] is True:
-            self.create_vm()
-        if self.options['status'] is True:
-            self.status()
-        if self.options['up'] is True:
-            self.up()
-        if self.options['destroy'] is True:
-            self.destroy()
-
-    def create_vm(self):
-        project_name = self.options['PROJECT_NAME']
+    def main(self, project_name):
 
         # Choose minion configuration
-        if len(self.config.get('minion_conf', [])) == 0:
+        if len(self.parent.config.get('minion_conf', [])) == 0:
             puts(colored.red("You must register at least one minion configuration,"
                 "use register_dir command to do so."))
             sys.exit(1)
-        if len(self.config.get('minion_conf', [])) == 1:
-            minion_conf = self.config['minion_conf'].values()[0]
+        if len(self.parent.config.get('minion_conf', [])) == 1:
+            minion_conf = self.parent.config['minion_conf'].values()[0]
         else:
             raise Exception("More than one minion configuration, TODO")
 
@@ -143,12 +131,12 @@ class VMManager(BaseObject):
         # Prepare vagrant file
 
         # Choose vagrantfile
-        if len(self.config.get('vagrantfiles', {})) == 0:
+        if len(self.parent.config.get('vagrantfiles', {})) == 0:
             logging.error("You must register at least one Vagrantfile, use"
                 "register_dir command to do so.")
             sys.exit(1)
-        if len(self.config.get('vagrantfiles', {})) == 1:
-            vagrantfile = self.config['vagrantfiles']['default']
+        if len(self.parent.config.get('vagrantfiles', {})) == 1:
+            vagrantfile = self.parent.config['vagrantfiles']['default']
         else:
             raise Exception("More than one Vagrantfile, TODO")
 
@@ -181,23 +169,28 @@ class VMManager(BaseObject):
         call("sudo cp %s/%s.pub /etc/salt/pki/master/minions/%s" % (project_path, project_name, project_name))
 
         # Register VM
-        self.config.setdefault('minions', {})[project_name] = project_path
+        self.parent.config.setdefault('minions', {})[project_name] = project_path
 
-        self.write_config_file()
+        self.parent.write_config_file()
 
-    def status(self):
-        for minion_name, minion_path in self.config.get('minions', {}).items():
+@SaltPad.subcommand("status")
+class Status(cli.Application):
+
+    def main(self):
+        for minion_name, minion_path in self.parent.config.get('minions', {}).items():
             vagrant = Vagrant(minion_path)
             vagrant_status = vagrant.status()['default']
-            salt_status = self.client.get_minion_status(minion_name)
+            salt_status = self.parent.client.get_minion_status(minion_name)
             puts("%s:" % minion_name)
             with indent(4):
                 puts("vagrant status: %s" % vagrant_status)
                 puts("saltstack status: %s" % salt_status)
 
-    def up(self):
-        project_name = self.options['PROJECT_NAME']
-        minion_path = self.config['minions'][project_name]
+@SaltPad.subcommand("up")
+class Up(cli.Application):
+
+    def main(self, project_name):
+        minion_path = self.parent.config['minions'][project_name]
         vagrant = Vagrant(minion_path)
         puts(colored.blue("Current %s vagrant status: %s" % (project_name, vagrant.status()['default'])))
 
@@ -206,11 +199,14 @@ class VMManager(BaseObject):
 
         puts(colored.blue("Done"))
         puts(colored.blue("New vagrant status: %s" % (vagrant.status()['default'])))
-        puts(colored.blue("Saltstack status: %s" % (self.client.get_minion_status(project_name))))
+        puts(colored.blue("Saltstack status: %s" % (self.parent.client.get_minion_status(project_name))))
 
-    def destroy(self):
-        project_name = self.options['PROJECT_NAME']
-        minion_path = self.config['minions'][project_name]
+
+@SaltPad.subcommand("destroy")
+class Destroy(cli.Application):
+
+    def main(self, project_name):
+        minion_path = self.parent.config['minions'][project_name]
         vagrant = Vagrant(minion_path)
 
         puts(colored.blue("Execute vagrant destroy on minion %s" % project_name))
@@ -220,19 +216,11 @@ class VMManager(BaseObject):
         puts(colored.blue("New vagrant status: %s" % (vagrant.status()['default'])))
 
 
-class SaltManager(BaseObject):
+@SaltPad.subcommand("deploy")
+class Deploy(cli.Application):
 
-    def __init__(self, options):
-        super(SaltManager, self).__init__()
-
-        self.options = options
-
-        if self.options['deploy'] is True:
-            self.deploy()
-
-    def deploy(self):
-        project_name = self.options['PROJECT_NAME']
-        minions = self.client.cmd(project_name, 'test.ping')
+    def main(self, project_name):
+        minions = self.parent.client.cmd(project_name, 'test.ping')
 
         if len(minions) == 0:
             puts(colored.red("No up minions matching, abort!"))
@@ -255,12 +243,12 @@ class SaltManager(BaseObject):
         for minion in minions:
             puts(colored.blue("=" * 10))
             puts(colored.blue("Minion: %s" % minion))
-            puts(colored.blue("Roles: %s" % eng_join(self.client.minions_roles()[minion], im_a_moron=True)))
+            puts(colored.blue("Roles: %s" % eng_join(self.parent.client.minions_roles()[minion], im_a_moron=True)))
 
             puts()
             puts(colored.blue("Execute state.highstate"))
 
-            result = self.client.cmd(minion, 'state.highstate',
+            result = self.parent.client.cmd(minion, 'state.highstate',
                 timeout=9999999999)[minion]
             success = self.parse_result(result)
 
@@ -271,11 +259,11 @@ class SaltManager(BaseObject):
                 sys.exit(1)
 
             # Do orchestration
-            orchestration_result = self.client.orchestrate(minion)
+            orchestration_result = self.parent.client.orchestrate(minion)
             print "orchestration_result", orchestration_result
 
             # Call health-checks
-            health_checks_result = self.client.health_check(minion)
+            health_checks_result = self.parent.client.health_check(minion)
             print "health_check", health_checks_result
 
         puts()
@@ -337,24 +325,5 @@ class SaltManager(BaseObject):
                 total, failure, success, changes, dependencies)))
             return False
 
-
-def dispatcher(options):
-    if options['register_dir'] is True:
-        Register(options)
-    elif options['create_vm'] is True:
-        VMManager(options)
-    elif options['status'] is True:
-        VMManager(options)
-    elif options['up'] is True:
-        VMManager(options)
-    elif options['destroy'] is True:
-        VMManager(options)
-    elif options['deploy'] is True:
-        SaltManager(options)
-    else:
-        raise Exception(options)
-
-
 if __name__ == '__main__':
-    arguments = docopt(__doc__, version='SaltPad 0.0.1')
-    dispatcher(arguments)
+    SaltPad.run()
