@@ -24,11 +24,11 @@ import os
 import sys
 import json
 import logging
-import subprocess
+import operator
 
 from core import SaltStackClient
 
-from plumbum import cli
+from plumbum import cli, local, FG
 from clint.eng import join as eng_join
 from clint.textui import colored, puts, indent
 from os import listdir, mkdir
@@ -44,8 +44,8 @@ def parse_step_name(step_name):
 
 
 def call(cmd):
-    print cmd
-    subprocess.call(cmd, shell=True)
+    # Execute cmd in FG with tty redirection
+    reduce(operator.getitem, [local] + cmd.split()) & FG
 
 
 class SaltPad(cli.Application):
@@ -186,34 +186,45 @@ class Status(cli.Application):
                 puts("vagrant status: %s" % vagrant_status)
                 puts("saltstack status: %s" % salt_status)
 
-@SaltPad.subcommand("up")
-class Up(cli.Application):
 
-    def main(self, project_name):
+class VagrantManagerMixin(object):
+
+    def execute_vagrant_command_on_minion(self, project_name, command):
         minion_path = self.parent.config['minions'][project_name]
         vagrant = Vagrant(minion_path)
-        puts(colored.blue("Current %s vagrant status: %s" % (project_name, vagrant.status()['default'])))
 
-        puts(colored.blue("Execute vagrant up on minion %s" % project_name))
-        vagrant.up(capture_output=False)
+        puts(colored.blue("Execute vagrant %s on minion %s" % (command, project_name)))
+        getattr(vagrant, command)(capture_output=False)
 
         puts(colored.blue("Done"))
-        puts(colored.blue("New vagrant status: %s" % (vagrant.status()['default'])))
-        puts(colored.blue("Saltstack status: %s" % (self.parent.client.get_minion_status(project_name))))
+
+@SaltPad.subcommand("up")
+class VagrantUp(cli.Application, VagrantManagerMixin):
+
+    def main(self, project_name):
+        self.execute_vagrant_command_on_minion(project_name, 'up')
+
+
+@SaltPad.subcommand("halt")
+class VagrantHalt(cli.Application, VagrantManagerMixin):
+
+    def main(self, project_name):
+        self.execute_vagrant_command_on_minion(project_name, 'halt')
 
 
 @SaltPad.subcommand("destroy")
-class Destroy(cli.Application):
+class VagrantDestroy(cli.Application, VagrantManagerMixin):
+
+    def main(self, project_name):
+        self.execute_vagrant_command_on_minion(project_name, 'destroy')
+
+@SaltPad.subcommand("ssh")
+class VagrantSSH(cli.Application):
 
     def main(self, project_name):
         minion_path = self.parent.config['minions'][project_name]
-        vagrant = Vagrant(minion_path)
-
-        puts(colored.blue("Execute vagrant destroy on minion %s" % project_name))
-        vagrant.destroy(capture_output=False)
-
-        puts(colored.blue("Done"))
-        puts(colored.blue("New vagrant status: %s" % (vagrant.status()['default'])))
+        with local.cwd(minion_path):
+            call('vagrant ssh')
 
 
 @SaltPad.subcommand("deploy")
@@ -324,6 +335,14 @@ class Deploy(cli.Application):
             puts(colored.red("{0} steps, {1} failures, {4} dependencies failed, {2} OK, {3} changes".format(
                 total, failure, success, changes, dependencies)))
             return False
+
+@SaltPad.subcommand("healthchecks")
+class Healthchecks(cli.Application):
+
+    def main(self, target):
+        health_checks_result = self.parent.client.health_check(target)
+        print "health_check", health_checks_result
+
 
 if __name__ == '__main__':
     SaltPad.run()

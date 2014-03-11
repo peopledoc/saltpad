@@ -101,21 +101,23 @@ class SaltStackClient(object):
 
     def run_job(self, minion, fun, key=None, *args, **kwargs):
         result = self.local.run_job(minion, fun,
-            timeout=99999999999999, ret='nova_mongo_return', args=args, kwarg=kwargs)
+            timeout=99999999999999, ret='nova_mongo_return', arg=args, kwarg=kwargs)
         if key is None:
             key = fun
         self.db[minion].insert({'jid': result['jid'], 'key': key})
         return result['jid']
 
     def cmd(self, target, fun, timeout=None, *args, **kwargs):
-        return self.local.cmd(target, fun, args=args, timeout=timeout,
+        return self.local.cmd(target, fun, arg=args, timeout=timeout,
             kwarg=kwargs)
 
     def cmd_iter(self, target, fun, *args, **kwargs):
-        return self.local.cmd_iter(target, fun, args=args, kwarg=kwargs)
+        return self.local.cmd_iter(target, fun, arg=args, kwarg=kwargs)
 
     def orchestrate(self, target):
         return ''
 
     def health_check(self, target):
-        return ''
+        print "Target", target
+        return self.local.cmd(target, 'state.top', arg=['healthcheck_top.sls'], timeout=9999999999, kwarg={})
+
