@@ -26,6 +26,8 @@ import json
 import logging
 import operator
 
+from salt.output.highstate import _format_host
+
 from core import SaltStackClient
 
 from plumbum import cli, local, FG
@@ -270,11 +272,12 @@ class Deploy(cli.Application):
                 sys.exit(1)
 
             # Do orchestration
-            orchestration_result = self.parent.client.orchestrate(minion)
-            print "orchestration_result", orchestration_result
+            # orchestration_result = self.parent.client.orchestrate(minion)
+            # print "orchestration_result", orchestration_result
 
             # Call health-checks
-            health_checks_result = self.parent.client.health_check(minion)
+            health_checks_result = self.parent.client.cmd(minion,
+                'state.top', 'healthcheck_top.sls', timeout=9999999999)[minion]
             print "health_check", health_checks_result
 
         puts()
@@ -340,8 +343,11 @@ class Deploy(cli.Application):
 class Healthchecks(cli.Application):
 
     def main(self, target):
-        health_checks_result = self.parent.client.health_check(target)
-        print "health_check", health_checks_result
+        puts(colored.blue("Starting deployment on %s" % target))
+        health_checks_result = self.parent.client.cmd(target,
+                'state.top', 9999999999, 'healthcheck_top.sls')
+        print output(health_checks_result)
+        puts(colored.blue("Done"))
 
 
 def main():

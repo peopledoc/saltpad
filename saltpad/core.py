@@ -5,10 +5,10 @@ import salt.config
 import salt.client
 import salt.runner
 import salt.key
-from traceback import print_stack
 
 import pymongo
 
+from salt.output import highstate
 
 from functools import wraps
 
@@ -31,6 +31,12 @@ class SaltStackClient(object):
     def __init__(self, collection_name="saltpad"):
         master_opts = salt.config.master_config(
             os.environ.get('SALT_MASTER_CONFIG', '/etc/salt/master'))
+
+        if not 'color' in master_opts:
+            master_opts['color'] = True
+
+        # Inject master_opts
+        highstate.__opts__ = master_opts
 
         minion_opts = salt.config.client_config(
             os.environ.get('SALT_MINION_CONFIG', '/etc/salt/minion'))
@@ -113,11 +119,3 @@ class SaltStackClient(object):
 
     def cmd_iter(self, target, fun, *args, **kwargs):
         return self.local.cmd_iter(target, fun, arg=args, kwarg=kwargs)
-
-    def orchestrate(self, target):
-        return ''
-
-    def health_check(self, target):
-        print "Target", target
-        return self.local.cmd(target, 'state.top', arg=['healthcheck_top.sls'], timeout=9999999999, kwarg={})
-
