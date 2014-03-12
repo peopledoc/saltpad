@@ -1,4 +1,5 @@
 wheel==0.22.0
+-e .
 clint
 jinja2
 pyyaml

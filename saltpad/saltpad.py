@@ -45,7 +45,7 @@ def parse_step_name(step_name):
 
 def call(cmd):
     # Execute cmd in FG with tty redirection
-    reduce(operator.getitem, [local] + cmd.split()) & FG
+    reduce(operator.getitem, [local] + cmd.split()) & FG(None)
 
 
 class SaltPad(cli.Application):
@@ -344,5 +344,9 @@ class Healthchecks(cli.Application):
         print "health_check", health_checks_result
 
 
-if __name__ == '__main__':
+def main():
     SaltPad.run()
+
+
+if __name__ == '__main__':
+    main()
