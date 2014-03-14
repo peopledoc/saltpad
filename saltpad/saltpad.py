@@ -30,6 +30,7 @@ from salt.output.highstate import _format_host
 
 from core import SaltStackClient
 
+from time import sleep
 from plumbum import cli, local, FG
 from clint.eng import join as eng_join
 from clint.textui import colored, puts, indent
@@ -38,7 +39,8 @@ from os.path import expanduser, isfile, join, isdir, split, abspath
 from pprint import pformat
 from jinja2 import Environment, meta
 from shutil import copy
-from vagrant import Vagrant
+from vagrant import Vagrant, SandboxVagrant
+from distutils.util import strtobool
 
 def parse_step_name(step_name):
     splitted = step_name.replace('_|', '|').replace('|-', '|').split('|')
@@ -46,8 +48,24 @@ def parse_step_name(step_name):
 
 
 def call(cmd):
-    # Execute cmd in FG with tty redirection
-    reduce(operator.getitem, [local] + cmd.split()) & FG(None)
+    print cmd
+    base_cmd = local
+    for part in cmd.split():
+        if '$' in part:
+            part = local.env[part.replace('$', '')]
+            for subpart in part.split():
+                base_cmd = base_cmd[subpart]
+        else:
+            base_cmd = base_cmd[part]
+    # Execute cmd in FG with tty redirection, ignore exit code
+    base_cmd & FG(None)
+
+
+def bool_choice(message):
+    try:
+        return strtobool(raw_input(message).lower())
+    except ValueError:
+        return 0
 
 
 class SaltPad(cli.Application):
@@ -82,6 +100,7 @@ class SaltPad(cli.Application):
 class RegisterDir(cli.Application):
 
     def main(self, templates_directory):
+        templates_directory = abspath(templates_directory)
         puts(colored.blue("Looking in %s for templates" %  templates_directory))
 
         # Check for VagrantFile template file
@@ -114,6 +133,11 @@ class RegisterDir(cli.Application):
 class CreateVm(cli.Application):
 
     def main(self, project_name):
+        # Check directory
+        project_path = abspath(project_name)
+        if isdir(project_path):
+            puts(colored.red("The directory %s already exists, abort" % project_path))
+            sys.exit(1)
 
         # Choose minion configuration
         if len(self.parent.config.get('minion_conf', [])) == 0:
@@ -123,12 +147,20 @@ class CreateVm(cli.Application):
         if len(self.parent.config.get('minion_conf', [])) == 1:
             minion_conf = self.parent.config['minion_conf'].values()[0]
         else:
-            raise Exception("More than one minion configuration, TODO")
+            minion_list = sorted(self.parent.config['minion_conf'].keys())
+            while True:
+                puts(colored.blue("Please choose a minion configuration:"))
+                for i, minion in enumerate(minion_list):
+                    print "%s) %s" % (i, minion)
+                try:
+                    minion_conf = minion_list[int(raw_input("Your choice: "))]
+                    break
+                except IndexError, ValueError:
+                    continue
 
-        # Check directory
-        project_path = abspath(project_name)
-        if isdir(project_path):
-            logging.error("The directory %s alread exists, abort", project_path)
+            minion_conf = self.parent.config['minion_conf'][minion_conf]
+
+        puts(colored.blue("Using %s as minion configuration" % minion_conf))
 
         # Prepare vagrant file
 
@@ -142,6 +174,8 @@ class CreateVm(cli.Application):
         else:
             raise Exception("More than one Vagrantfile, TODO")
 
+        puts(colored.blue("Using %s as VagrantFile template" % vagrantfile))
+
         # Get declared variables
         env = Environment()
         with open(vagrantfile) as f:
@@ -150,6 +184,9 @@ class CreateVm(cli.Application):
         missing_variables = meta.find_undeclared_variables(env.parse(vagrantfile_template))
         missing_variables.remove('project_name')
         variables = {'project_name': project_name}
+
+        if missing_variables:
+            puts(colored.blue("Please enter VagrantFile template variables:"))
 
         # Prompt them
         for variable_name in missing_variables:
@@ -164,16 +201,37 @@ class CreateVm(cli.Application):
         copy(minion_conf, join(project_path, 'minion'))
         with open(join(project_path, 'Vagrantfile'), 'w') as f:
             f.write(rendered_vagrantfile)
+
         # Generate keys
-        call("sudo salt-key --gen-keys=%s --gen-keys-dir=%s" % (project_name, project_path))
-        call("sudo chmod 777 %s/%s.*" % (project_path, project_name))
+        puts(colored.blue("Generating keys for minion"))
+        call("salt-key --gen-keys=%s --gen-keys-dir=%s" % (project_name, project_path))
         # Copy it on master
-        call("sudo cp %s/%s.pub /etc/salt/pki/master/minions/%s" % (project_path, project_name, project_name))
+        call("cp %s/%s.pub /etc/salt/pki/master/minions/%s" % (project_path, project_name, project_name))
 
         # Register VM
         self.parent.config.setdefault('minions', {})[project_name] = project_path
 
         self.parent.write_config_file()
+
+        puts(colored.blue("Done"))
+
+        # Edition of minion configuration
+        puts(colored.blue("Would you like to edit minion configuration?"))
+        choice = bool_choice("Yes/No: ")
+
+        if choice:
+            call("$EDITOR %s" % join(project_path, minion))
+            puts(colored.blue("Edition done"))
+
+        # Done
+        puts(colored.blue("Would you like to run vagrant up on VM?"))
+        choice = bool_choice("Yes/No: ")
+
+        if choice:
+            VagrantUp.parent = self.parent
+            VagrantUp.run(['up', project_name])
+
+
 
 @SaltPad.subcommand("status")
 class Status(cli.Application):
@@ -206,6 +264,27 @@ class VagrantUp(cli.Application, VagrantManagerMixin):
     def main(self, project_name):
         self.execute_vagrant_command_on_minion(project_name, 'up')
 
+        # Check if sahara is available
+        minion_path = self.parent.config['minions'][project_name]
+        sandbox = SandboxVagrant(minion_path)
+        sandbox_status = sandbox.sandbox_status()
+
+        if sandbox_status == 'not installed':
+            message = "Sandbox support is not available, please install sahara"\
+                      " plugin with 'vagrant plugin install sahara'"
+            puts(colored.yellow(message))
+        else:
+            if sandbox_status == 'on':
+                puts(colored.blue("Snapshot is already enabled on VM"))
+            else:
+                puts(colored.blue("Would you like to enable snapshot on VM?"))
+                choice = bool_choice("Yes/No: ")
+
+                if choice:
+                    puts(colored.blue("Starting snapshot"))
+                    sandbox.sandbox_on()
+                    puts(colored.blue("Done"))
+
 
 @SaltPad.subcommand("halt")
 class VagrantHalt(cli.Application, VagrantManagerMixin):
@@ -220,6 +299,14 @@ class VagrantDestroy(cli.Application, VagrantManagerMixin):
     def main(self, project_name):
         self.execute_vagrant_command_on_minion(project_name, 'destroy')
 
+
+@SaltPad.subcommand("provision")
+class VagrantProvision(cli.Application, VagrantManagerMixin):
+
+    def main(self, project_name):
+        self.execute_vagrant_command_on_minion(project_name, 'provision')
+
+
 @SaltPad.subcommand("ssh")
 class VagrantSSH(cli.Application):
 
@@ -232,7 +319,41 @@ class VagrantSSH(cli.Application):
 @SaltPad.subcommand("deploy")
 class Deploy(cli.Application):
 
+    clean = cli.Flag("--clean", default = False, help = "Clean VM before deploying it")
+
+    def do_clean(self, project_name):
+        minion_path = self.parent.config['minions'][project_name]
+        sandbox = SandboxVagrant(minion_path)
+        sandbox_status = sandbox.sandbox_status()
+
+        # If sandbox is activated, rollback only
+        if sandbox_status == 'on':
+            message = "Rollback snapshot, if you will delete snapshot, use "\
+                      "--force-clean option"
+            puts(colored.blue(message))
+            sandbox.sandbox_rollback()
+            puts(colored.blue("Done"))
+
+            puts(colored.blue("Wait some time for salt-minion to connect"))
+            sleep(5)
+        # Else destroy and up
+        else:
+            # Destroy
+            VagrantDestroy.parent = self.parent
+            VagrantDestroy.run(['destroy', project_name])
+
+            # Up
+            VagrantUp.parent = self.parent
+            VagrantUp.run(['up', project_name])
+
+
+
     def main(self, project_name):
+        # Clean
+        if self.clean:
+            self.do_clean(project_name)
+
+        # Deploy
         minions = self.parent.client.cmd(project_name, 'test.ping')
 
         if len(minions) == 0:

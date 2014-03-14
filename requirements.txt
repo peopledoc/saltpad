@@ -3,5 +3,5 @@ wheel==0.22.0
 clint
 jinja2
 pyyaml
-python-vagrant
+git+git@github.com:novapost/python-vagrant.git
 plumbum
