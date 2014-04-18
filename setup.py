@@ -47,7 +47,8 @@ setup(
     test_suite='tests',
     entry_points={
         'console_scripts': [
-            'saltpad = saltpad.saltpad:main'
+            'saltpad = saltpad.saltpad:main',
+            'saltpad-vagrant = saltpad.saltpad_vagrant:main'
         ]
     }
 )
