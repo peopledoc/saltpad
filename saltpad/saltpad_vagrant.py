@@ -184,7 +184,7 @@ class Status(cli.Application):
     def main(self):
         for minion_name, minion_path in self.parent.config.get('minions', {}).items():
             vagrant = Vagrant(minion_path)
-            vagrant_status = vagrant.status()[0].state
+            vagrant_status = vagrant.status()['default']
             salt_status = self.parent.client.get_minion_status(minion_name)
             puts("%s:" % minion_name)
             with indent(4):
