@@ -229,6 +229,8 @@ class Deploy(cli.Application):
 
 @SaltPad.subcommand("healthchecks")
 class Healthchecks(cli.Application):
+    """Run healthchecks on minions matching target
+    """
 
     def main(self, target):
         minions = self.parent.client.cmd(target, 'test.ping')
