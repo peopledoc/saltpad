@@ -44,7 +44,6 @@ setup(
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.3',
     ],
-    test_suite='tests',
     entry_points={
         'console_scripts': [
             'saltpad = saltpad.saltpad:main',

@@ -1,7 +1,6 @@
 wheel==0.22.0
--e .
 clint
 jinja2
 pyyaml
--e git+git@github.com:todddeluca/python-vagrant.git@master#egg=python_vagrant
+python-vagrant>=0.5.0
 plumbum

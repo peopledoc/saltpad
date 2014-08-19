@@ -108,6 +108,11 @@ class CreateVm(cli.Application, VagrantManagerMixin):
 
         puts(colored.blue("Using %s as minion configuration" % minion_conf))
 
+        ##
+        # TODO CHECK IF PROJECT_NAME == MINION_CONFIGURATION
+        # ELSE MODIFY
+        ##
+
         # Prepare vagrant file
 
         # Choose vagrantfile
@@ -333,6 +338,11 @@ class Deploy(BaseDeploy):
             puts(colored.blue(message))
             sandbox.sandbox_rollback()
             puts(colored.blue("Done"))
+
+            command = "sudo /etc/init.d/salt-minion restart"
+            result = get_output_cmd(command, minion_path)
+
+            puts(colored.blue("Restarted salt-minion"))
 
             puts(colored.blue("Wait some time for salt-minion to connect"))
             sleep(10)
