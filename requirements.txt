@@ -4,3 +4,4 @@ jinja2
 pyyaml
 python-vagrant>=0.5.0
 plumbum
+flask
